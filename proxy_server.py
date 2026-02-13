@@ -16,6 +16,7 @@ app = FastAPI()
 PHONE_IP = os.getenv("PHONE_IP", "100.87.250.20")
 PHONE_PORT = int(os.getenv("PHONE_PORT", "8081"))
 BACKEND_URL = f"http://{PHONE_IP}:{PHONE_PORT}"
+SKIP_CHECKS = os.getenv("SKIP_CHECKS", "false").lower() == "true"  # For cloud deployments
 
 
 def run_command(cmd):
@@ -160,14 +161,19 @@ if __name__ == "__main__":
     print("🚀 Cantio Reverse Proxy Starting")
     print("=" * 60)
     
-    # Check Tailscale
-    check_tailscale()
+    if not SKIP_CHECKS:
+        # Check Tailscale
+        check_tailscale()
+        
+        # Check phone connection
+        check_phone_connection()
+        
+        print("=" * 60)
+        print(f"✅ All checks passed!")
+    else:
+        print("⚠️  Running in SKIP_CHECKS mode (cloud deployment)")
+        print(f"   Assuming {BACKEND_URL} is reachable")
     
-    # Check phone connection
-    check_phone_connection()
-    
-    print("=" * 60)
-    print(f"✅ All checks passed!")
     print(f"🔄 Proxying 0.0.0.0:8080 → {BACKEND_URL}")
     print("=" * 60)
     
