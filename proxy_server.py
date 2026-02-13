@@ -48,10 +48,40 @@ def check_tailscale():
     # Check if tailscale is running
     code, stdout, _ = run_command("tailscale status")
     if code != 0 or "Logged out" in stdout:
-        print("❌ Tailscale not connected. Please run:")
-        print("   sudo tailscale up")
-        print("   Then authenticate via the URL provided")
-        sys.exit(1)
+        print("⚠️  Tailscale not connected. Attempting to connect...")
+        
+        # Try to bring up tailscale
+        code, stdout, stderr = run_command("sudo tailscale up")
+        
+        if code != 0:
+            print(f"❌ Failed to connect Tailscale: {stderr}")
+            print("\n📋 Manual steps:")
+            print("   1. Run: sudo tailscale up")
+            print("   2. Open the authentication URL in your browser")
+            print("   3. Authenticate and restart this script")
+            sys.exit(1)
+        
+        # Check if authentication URL is in output
+        if "https://" in stdout:
+            print("\n🔐 Tailscale requires authentication!")
+            print("=" * 60)
+            print(stdout)
+            print("=" * 60)
+            print("\n📋 Please:")
+            print("   1. Open the URL above in your browser")
+            print("   2. Authenticate")
+            print("   3. Restart this script")
+            sys.exit(0)
+        
+        # Wait a moment for connection to establish
+        time.sleep(2)
+        
+        # Verify connection
+        code, stdout, _ = run_command("tailscale status")
+        if code != 0 or "Logged out" in stdout:
+            print("❌ Tailscale connection failed. Please run manually:")
+            print("   sudo tailscale up")
+            sys.exit(1)
     
     print("✅ Tailscale is running")
     return True
