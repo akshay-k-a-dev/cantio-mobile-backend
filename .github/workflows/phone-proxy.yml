@@ -92,8 +92,14 @@ jobs:
       
       - name: Enable Tailscale Funnel
         run: |
-          echo "🌐 Enabling Tailscale Funnel for public access..."
-          sudo tailscale funnel --bg 8080
+          echo "🌐 Setting up Tailscale Serve and Funnel for public access..."
+          
+          # First, set up serve on port 8080
+          sudo tailscale serve --bg 8080
+          sleep 2
+          
+          # Enable funnel for public internet access
+          sudo tailscale funnel 8080 on
           sleep 3
           
           # Get the funnel URL
@@ -107,12 +113,13 @@ jobs:
       
       - name: Keep alive
         run: |
-          trap 'echo "🛑 Received cancellation signal"; kill $PROXY_PID 2>/dev/null; sudo tailscale funnel --bg off; tailscale logout; exit 0' SIGTERM SIGINT
+          trap 'echo "🛑 Received cancellation signal"; kill $PROXY_PID 2>/dev/null; sudo tailscale funnel 8080 off; sudo tailscale serve off; tailscale logout; exit 0' SIGTERM SIGINT
           
           while true; do
             if ! kill -0 $PROXY_PID 2>/dev/null; then
               echo "❌ Proxy process died unexpectedly"
-              sudo tailscale funnel --bg off
+              sudo tailscale funnel 8080 off
+              sudo tailscale serve off
               exit 1
             fi
             
