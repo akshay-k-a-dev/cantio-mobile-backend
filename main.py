@@ -217,11 +217,14 @@ def try_extract_stream(url: str, is_youtube: bool = False, platform_name: str = 
         try:
             # Base options for all platforms - FORCE AUDIO ONLY
             ydl_opts = {
-                "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+                # Force best audio-only formats (no video)
+                "format": "bestaudio[vcodec=none]/bestaudio[acodec=opus]/bestaudio[acodec=vorbis]/bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio",
                 "quiet": True,
                 "no_warnings": True,
                 "extract_flat": False,
                 "skip_download": True,
+                "prefer_free_formats": True,
+                "postprocessors": [],  # No post-processing for streaming
                 "http_headers": {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "Accept-Language": "en-US,en;q=0.9",
@@ -265,27 +268,61 @@ def try_extract_stream(url: str, is_youtube: bool = False, platform_name: str = 
 
             if not stream_url:
                 formats = info.get("formats", [])
-                # STRICT audio-only filtering - NO VIDEO
-                audio_formats = [
-                    f for f in formats 
-                    if f.get("acodec") != "none" 
-                    and (f.get("vcodec") == "none" or f.get("vcodec") is None)
-                ]
                 
-                # If no pure audio, try formats with audio codec
-                if not audio_formats:
-                    audio_formats = [f for f in formats if f.get("acodec") != "none"]
-                    logger.warning("No pure audio formats found, falling back to formats with audio")
+                # ULTRA STRICT audio-only filtering - ABSOLUTELY NO VIDEO
+                audio_only_formats = []
                 
-                if audio_formats:
-                    best = max(audio_formats, key=lambda f: f.get("abr") or f.get("tbr") or 0)
-                    stream_url = best.get("url")
-                    logger.info(f"Selected format: {best.get('format_id')} - codec: {best.get('acodec')}, vcodec: {best.get('vcodec')}")
+                for f in formats:
+                    vcodec = f.get("vcodec", "")
+                    acodec = f.get("acodec", "")
+                    
+                    # Must have audio codec
+                    if acodec == "none" or not acodec:
+                        continue
+                    
+                    # Must NOT have video codec
+                    if vcodec and vcodec != "none":
+                        continue
+                    
+                    # Prefer specific audio formats
+                    ext = f.get("ext", "")
+                    if ext in ["m4a", "mp3", "opus", "ogg", "webm", "wav", "aac", "flac"]:
+                        audio_only_formats.append(f)
+                
+                if not audio_only_formats:
+                    # Fallback: any format with audio and no video
+                    audio_only_formats = [
+                        f for f in formats 
+                        if f.get("acodec") not in ["none", None, ""] 
+                        and f.get("vcodec") in ["none", None, ""]
+                    ]
+                
+                if not audio_only_formats:
+                    logger.error(f"No pure audio formats found. Available formats: {[f.get('format_id') for f in formats]}")
+                    return None
+                
+                # Select best audio format by bitrate
+                best = max(audio_only_formats, key=lambda f: f.get("abr") or f.get("tbr") or 0)
+                stream_url = best.get("url")
+                
+                format_info = {
+                    "format_id": best.get("format_id"),
+                    "ext": best.get("ext"),
+                    "acodec": best.get("acodec"),
+                    "vcodec": best.get("vcodec"),
+                    "abr": best.get("abr"),
+                }
+                logger.info(f"✓ Selected audio-only format: {format_info}")
 
             if not stream_url:
                 return None
             
             logger.info(f"✓ Successfully extracted from {extractor_key}: {info.get('title', 'Unknown')}")
+            
+            # Get format extension for audio type
+            format_ext = info.get("ext", "unknown")
+            if "formats" in locals() and audio_only_formats:
+                format_ext = best.get("ext", format_ext)
             
             return {
                 "title": info.get("title", "Unknown"),
@@ -294,6 +331,8 @@ def try_extract_stream(url: str, is_youtube: bool = False, platform_name: str = 
                 "duration": info.get("duration"),
                 "thumbnail": info.get("thumbnail"),
                 "uploader": info.get("uploader"),
+                "audio_format": format_ext,
+                "is_audio_only": True,
             }
             
         except Exception as e:
