@@ -1,0 +1,115 @@
+name: Phone Server Proxy
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/30 * * * *'  # Auto-restart every 30 minutes
+
+jobs:
+  proxy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours max
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install fastapi uvicorn httpx
+      
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TS_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TS_OAUTH_SECRET }}
+          tags: tag:ci
+      
+      - name: Create proxy server
+        run: |
+          cat > proxy.py << 'EOF'
+          import httpx
+          import logging
+          from fastapi import FastAPI, Request, Response
+          from fastapi.middleware.cors import CORSMiddleware
+          
+          logging.basicConfig(level=logging.INFO)
+          logger = logging.getLogger(__name__)
+          
+          app = FastAPI()
+          
+          app.add_middleware(
+              CORSMiddleware,
+              allow_origins=["*"],
+              allow_credentials=True,
+              allow_methods=["*"],
+              allow_headers=["*"],
+          )
+          
+          PHONE_URL = "http://100.87.250.20:8081"
+          
+          @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"])
+          async def proxy(path: str, request: Request):
+              target_url = f"{PHONE_URL}/{path}"
+              if request.url.query:
+                  target_url += f"?{request.url.query}"
+              
+              logger.info(f"Proxying {request.method} {target_url}")
+              
+              async with httpx.AsyncClient(timeout=30.0) as client:
+                  try:
+                      response = await client.request(
+                          method=request.method,
+                          url=target_url,
+                          headers=dict(request.headers),
+                          content=await request.body(),
+                      )
+                      return Response(
+                          content=response.content,
+                          status_code=response.status_code,
+                          headers=dict(response.headers),
+                      )
+                  except Exception as e:
+                      logger.error(f"Proxy error: {e}")
+                      return Response(
+                          content=f"Phone server unreachable: {str(e)}",
+                          status_code=502,
+                      )
+          EOF
+      
+      - name: Start proxy server
+        run: |
+          uvicorn proxy:app --host 0.0.0.0 --port 8080 &
+          sleep 5
+          echo "Proxy server started"
+      
+      - name: Setup Cloudflare Tunnel
+        run: |
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared-linux-amd64.deb
+          
+          echo "🚀 Starting Cloudflare Tunnel..."
+          cloudflared tunnel --url http://localhost:8080 &
+          
+          sleep 10
+          
+          # Try to find and display the URL
+          echo "📡 Checking for tunnel URL..."
+          curl -s http://localhost:8080/kaithhealthcheck || echo "Waiting for proxy..."
+          
+          echo "✅ Tunnel is running. Check logs above for the https://...trycloudflare.com URL"
+          echo "⏰ Will run for 6 hours or until manually stopped"
+      
+      - name: Keep alive
+        run: |
+          # Keep the job alive
+          while true; do
+            sleep 300
+            echo "⏱️  Proxy still running... $(date)"
+            curl -s http://localhost:8080/kaithhealthcheck > /dev/null || echo "⚠️  Health check failed"
+          done
