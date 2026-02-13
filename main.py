@@ -4,6 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from yt_dlp import YoutubeDL
+import re
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -28,6 +29,72 @@ MUSIC_PLATFORMS = {
     # Direct audio sources
     "generic",  # For direct .mp3, .m3u8 links
 }
+
+# Alternative platforms to search (in order of preference)
+ALTERNATIVE_PLATFORMS = [
+    ("soundcloud", "https://soundcloud.com/search?q="),
+    ("audiomack", "https://audiomack.com/search?q="),
+    ("bandcamp", "https://bandcamp.com/search?q="),
+]
+
+def extract_metadata_from_youtube(url: str):
+    """Extract song metadata from YouTube URL without downloading"""
+    try:
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": True,
+            "skip_download": True,
+        }
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            title = info.get("title", "")
+            uploader = info.get("uploader", "")
+            
+            # Clean up title to extract song/artist
+            # Remove common patterns like "Official Video", "[Official]", etc.
+            clean_title = re.sub(r'\[.*?\]|\(.*?\)|official|video|audio|lyrics|hd|4k', '', title, flags=re.IGNORECASE)
+            clean_title = clean_title.strip()
+            
+            logger.info(f"Extracted metadata - Title: {clean_title}, Uploader: {uploader}")
+            return {
+                "title": clean_title,
+                "artist": uploader,
+                "original_title": title,
+                "search_query": f"{clean_title} {uploader}".strip()
+            }
+    except Exception as e:
+        logger.error(f"Failed to extract YouTube metadata: {e}")
+        return None
+
+def search_alternative_platform(metadata: dict, platform_name: str, search_base: str):
+    """Search for song on alternative platform"""
+    try:
+        search_query = metadata["search_query"]
+        search_url = f"{search_base}{search_query.replace(' ', '+')}"
+        
+        logger.info(f"Searching on {platform_name}: {search_url}")
+        
+        ydl_opts = {
+            "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": "in_playlist",
+            "playlist_items": "1",  # Only get first result
+            "skip_download": True,
+        }
+        
+        with YoutubeDL(ydl_opts) as ydl:
+            result = ydl.extract_info(f"ytsearch1:{search_query} {platform_name}", download=False)
+            
+            if result and result.get("entries"):
+                entry = result["entries"][0]
+                logger.info(f"Found on {platform_name}: {entry.get('title')}")
+                return entry.get("url") or entry.get("webpage_url")
+    except Exception as e:
+        logger.warning(f"Search failed on {platform_name}: {e}")
+    
+    return None
 
 def is_music_platform(url: str, extractor_key: str = None) -> bool:
     """Check if URL is from a pure music platform (no social media)"""
@@ -69,19 +136,11 @@ def health_check():
 
 @app.get("/stream")
 def stream(url: str = Query(..., description="Music/audio URL from supported platforms")):
-    # Pre-check if URL is from a music platform
-    if not is_music_platform(url):
-        logger.warning(f"Rejected non-music platform: {url}")
-        raise HTTPException(
-            status_code=400,
-            detail="URL must be from a music platform (YouTube, SoundCloud, Spotify, Bandcamp, TikTok, etc.)"
-        )
-    
-    # Retry logic for bot detection
-    MAX_RETRIES = 3
+def try_extract_stream(url: str, is_youtube: bool = False, platform_name: str = None, max_retries: int = 2):
+    """Try to extract stream from URL with retry logic"""
     last_error = None
     
-    for attempt in range(MAX_RETRIES):
+    for attempt in range(max_retries):
         try:
             # Base options for all platforms - FORCE AUDIO ONLY
             ydl_opts = {
@@ -90,10 +149,6 @@ def stream(url: str = Query(..., description="Music/audio URL from supported pla
                 "no_warnings": True,
                 "extract_flat": False,
                 "skip_download": True,
-                "postprocessors": [{
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "best",
-                }],
                 "http_headers": {
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                     "Accept-Language": "en-US,en;q=0.9",
@@ -101,7 +156,7 @@ def stream(url: str = Query(..., description="Music/audio URL from supported pla
             }
             
             # YouTube-specific optimizations
-            if "youtube.com" in url or "youtu.be" in url or "music.youtube.com" in url:
+            if is_youtube:
                 ydl_opts["extractor_args"] = {
                     "youtube": {
                         "player_client": ["android_music", "android"],
@@ -112,23 +167,78 @@ def stream(url: str = Query(..., description="Music/audio URL from supported pla
                 logger.info(f"Using YouTube-specific optimizations (attempt {attempt + 1})")
             
             with YoutubeDL(ydl_opts) as ydl:
-                logger.info(f"Extracting from: {url} (attempt {attempt + 1}/{MAX_RETRIES})")
+                logger.info(f"Extracting from: {url} (attempt {attempt + 1}/{max_retries})")
                 info = ydl.extract_info(url, download=False)
             
             if not info:
-                raise HTTPException(status_code=404, detail="No info extracted")
+                return None
             
-            # Extract platform info first
+            # Handle search results
+            if "entries" in info:
+                if not info["entries"]:
+                    return None
+                info = info["entries"][0]
+            
+            # Extract platform info
             extractor = info.get("extractor", "Unknown")
             extractor_key = info.get("extractor_key", "Unknown")
             
             # Double-check extracted content is from music platform
             if not is_music_platform(url, extractor_key):
                 logger.warning(f"Extracted from non-music platform: {extractor_key}")
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Platform '{extractor_key}' is not supported for music streaming"
-                )
+                return None
+
+            stream_url = info.get("url")
+
+            if not stream_url:
+                formats = info.get("formats", [])
+                # STRICT audio-only filtering - NO VIDEO
+                audio_formats = [
+                    f for f in formats 
+                    if f.get("acodec") != "none" 
+                    and (f.get("vcodec") == "none" or f.get("vcodec") is None)
+                ]
+                
+                # If no pure audio, try formats with audio codec
+                if not audio_formats:
+                    audio_formats = [f for f in formats if f.get("acodec") != "none"]
+                    logger.warning("No pure audio formats found, falling back to formats with audio")
+                
+                if audio_formats:
+                    best = max(audio_formats, key=lambda f: f.get("abr") or f.get("tbr") or 0)
+                    stream_url = best.get("url")
+                    logger.info(f"Selected format: {best.get('format_id')} - codec: {best.get('acodec')}, vcodec: {best.get('vcodec')}")
+
+            if not stream_url:
+                return None
+            
+            logger.info(f"✓ Successfully extracted from {extractor_key}: {info.get('title', 'Unknown')}")
+            
+            return {
+                "title": info.get("title", "Unknown"),
+                "stream_url": stream_url,
+                "platform": extractor_key,
+                "duration": info.get("duration"),
+                "thumbnail": info.get("thumbnail"),
+                "uploader": info.get("uploader"),
+            }
+            
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"✗ Attempt {attempt + 1}/{max_retries} failed: {last_error}")
+            
+            # If YouTube bot detection, return None to trigger alternatives
+            if is_youtube and ("Sign in to confirm" in last_error or "bot" in last_error.lower()):
+                logger.warning("YouTube bot detection - will try alternatives")
+                return None
+            
+            # For non-YouTube, retry with backoff
+            if attempt < max_retries - 1:
+                import time
+                time.sleep(1)
+                continue
+    
+    return None
 
             stream_url = info.get("url")
 
@@ -177,17 +287,8 @@ def stream(url: str = Query(..., description="Music/audio URL from supported pla
                 if "youtube.com" in url or "youtu.be" in url:
                     logger.error(f"YouTube blocked after {attempt + 1} attempts: {url}")
                     raise HTTPException(
-                        status_code=403,
-                        detail={
-                            "error": "YouTube blocked request from datacenter IP",
-                            "suggestion": "Try alternative platforms: SoundCloud, Bandcamp, Spotify, or use phone server for YouTube",
-                            "alternatives": [
-                                "https://soundcloud.com",
-                                "https://bandcamp.com",
-                                "https://music.apple.com",
-                                "https://audiomack.com"
-                            ]
-                        }
+                        status_code=503,
+                        detail="YouTube doesn't work from cloud servers. Use SoundCloud, Bandcamp, Spotify, Apple Music, or Audiomack instead. For YouTube, use the phone server proxy."
                     )
                 
                 # For non-YouTube platforms, retry with backoff
