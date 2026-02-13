@@ -50,10 +50,10 @@ jobs:
           sleep 5
           
           echo "Testing local proxy..."
-          curl -f http://localhost:8081/kaithhealthcheck || echo "Proxy not ready yet"
+          curl -f http://localhost:8080/kaithhealthcheck || echo "Proxy not ready yet"
           
           echo "Starting Cloudflare tunnel..."
-          cloudflared tunnel --url http://localhost:8081 > tunnel.log 2>&1 &
+          cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
           TUNNEL_PID=$!
           
           sleep 10
