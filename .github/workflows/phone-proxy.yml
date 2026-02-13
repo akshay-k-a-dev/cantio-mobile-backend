@@ -85,31 +85,39 @@ jobs:
       - name: Start proxy server
         run: |
           uvicorn proxy:app --host 0.0.0.0 --port 8080 &
+          PROXY_PID=$!
+          echo "PROXY_PID=$PROXY_PID" >> $GITHUB_ENV
           sleep 5
-          echo "Proxy server started"
+          echo "✅ Proxy server started (PID: $PROXY_PID)"
       
-      - name: Setup Cloudflare Tunnel
+      - name: Enable Tailscale Funnel
         run: |
-          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-          sudo dpkg -i cloudflared-linux-amd64.deb
+          echo "🌐 Enabling Tailscale Funnel for public access..."
+          sudo tailscale funnel --bg 8080
+          sleep 3
           
-          echo "🚀 Starting Cloudflare Tunnel..."
-          cloudflared tunnel --url http://localhost:8080 &
+          # Get the funnel URL
+          FUNNEL_URL=$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')
+          echo "📡 Public URL: https://$FUNNEL_URL"
+          echo "💡 Health check: https://$FUNNEL_URL/kaithhealthcheck"
+          echo ""
+          echo "FUNNEL_URL=https://$FUNNEL_URL" >> $GITHUB_ENV
           
-          sleep 10
-          
-          # Try to find and display the URL
-          echo "📡 Checking for tunnel URL..."
-          curl -s http://localhost:8080/kaithhealthcheck || echo "Waiting for proxy..."
-          
-          echo "✅ Tunnel is running. Check logs above for the https://...trycloudflare.com URL"
-          echo "⏰ Will run for 6 hours or until manually stopped"
+          echo "⏰ Proxy will run for 6 hours or until manually stopped"
       
       - name: Keep alive
         run: |
-          # Keep the job alive
+          trap 'echo "🛑 Received cancellation signal"; kill $PROXY_PID 2>/dev/null; sudo tailscale funnel --bg off; tailscale logout; exit 0' SIGTERM SIGINT
+          
           while true; do
+            if ! kill -0 $PROXY_PID 2>/dev/null; then
+              echo "❌ Proxy process died unexpectedly"
+              sudo tailscale funnel --bg off
+              exit 1
+            fi
+            
             sleep 300
             echo "⏱️  Proxy still running... $(date)"
+            echo "🌐 Public URL: $FUNNEL_URL"
             curl -s http://localhost:8080/kaithhealthcheck > /dev/null || echo "⚠️  Health check failed"
           done
