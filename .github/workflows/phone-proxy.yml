@@ -100,22 +100,31 @@ jobs:
         run: |
           echo "🌐 Setting up Tailscale Serve and Funnel for public access..."
           
-          # Set up serve to proxy HTTPS traffic to localhost:8080
-          sudo tailscale serve https / http://localhost:8080
+          # Set up serve to proxy HTTPS/443 traffic to localhost:8080
+          sudo tailscale serve https:443 / http://localhost:8080
           sleep 2
           
+          # Check serve status before enabling funnel
+          echo "📋 Serve configuration:"
+          sudo tailscale serve status
+          
           # Enable funnel for public internet access
+          echo "🔓 Enabling public funnel..."
           sudo tailscale funnel on
-          sleep 3
+          sleep 5
           
           # Get the funnel URL
           FUNNEL_URL=$(tailscale status --json | jq -r '.Self.DNSName' | sed 's/\.$//')
+          echo ""
+          echo "======================================"
           echo "📡 Public URL: https://$FUNNEL_URL"
           echo "💡 Health check: https://$FUNNEL_URL/kaithhealthcheck"
+          echo "======================================"
           echo ""
           echo "FUNNEL_URL=https://$FUNNEL_URL" >> $GITHUB_ENV
           
-          # Show serve status
+          # Final status check
+          echo "✅ Final configuration:"
           sudo tailscale serve status
           
           echo "⏰ Proxy will run for 6 hours or until manually stopped"
