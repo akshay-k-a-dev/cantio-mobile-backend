@@ -8,8 +8,6 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI()
 
-COOKIES_FILE = Path(__file__).parent / "cookies.txt"
-
 
 @app.get("/kaithhealthcheck")
 @app.get("/kaithheathcheck")
@@ -24,7 +22,7 @@ YDL_OPTS = {
     "skip_download": True,
     "extractor_args": {
         "youtube": {
-            "player_client": ["android_vr", "web_creator"],
+            "player_client": ["android_vr", "web_creator", "ios"],
         },
     },
     "http_headers": {
@@ -34,8 +32,7 @@ YDL_OPTS = {
     },
 }
 
-if COOKIES_FILE.exists():
-    YDL_OPTS["cookiefile"] = str(COOKIES_FILE)
+# Cookies disabled - using player_client bypass instead
 
 
 @app.get("/stream")
