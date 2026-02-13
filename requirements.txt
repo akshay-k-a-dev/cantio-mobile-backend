@@ -2,3 +2,4 @@ fastapi
 uvicorn[standard]
 yt-dlp>=2026.02.04
 pytubefix
+httpx

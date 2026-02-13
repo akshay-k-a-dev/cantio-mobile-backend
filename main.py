@@ -7,6 +7,7 @@ from yt_dlp import YoutubeDL
 import re
 from pytubefix import YouTube
 from pytubefix.innertube import InnerTube
+import httpx
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,6 +22,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Legacy search API
+LEGACY_API_BASE = "https://music-mu-lovat.vercel.app"
 
 # Music-focused platforms - only pure music sources allowed
 MUSIC_PLATFORMS = {
@@ -38,6 +42,42 @@ ALTERNATIVE_PLATFORMS = [
     ("audiomack", "https://audiomack.com/search?q="),
     ("bandcamp", "https://bandcamp.com/search?q="),
 ]
+
+async def search_legacy_api(query: str):
+    """Search the legacy Cantio API for track information"""
+    try:
+        logger.info(f"Searching legacy API for: {query}")
+        
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{LEGACY_API_BASE}/api/search",
+                params={"q": query}
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                # Check if we have results
+                if data and isinstance(data, list) and len(data) > 0:
+                    # Get first result
+                    track = data[0]
+                    video_id = track.get("id") or track.get("videoId")
+                    title = track.get("title") or track.get("name")
+                    
+                    if video_id:
+                        logger.info(f"✓ Legacy API found: {title} (ID: {video_id})")
+                        return {
+                            "video_id": video_id,
+                            "title": title,
+                            "youtube_url": f"https://www.youtube.com/watch?v={video_id}"
+                        }
+                
+                logger.warning("Legacy API returned no results")
+                return None
+                
+    except Exception as e:
+        logger.error(f"Legacy API search failed: {e}")
+        return None
 
 def extract_metadata_from_youtube(url: str):
     """Extract song metadata from YouTube URL using InnerTube API"""
@@ -143,28 +183,42 @@ def search_alternative_platform(metadata: dict, platform_name: str, search_base:
 def is_music_platform(url: str, extractor_key: str = None) -> bool:
     """Check if URL is from a pure music platform (no social media)"""
     url_lower = url.lower()
+async def stream(url: str = Query(..., description="Music/audio URL from supported platforms")):
+    # Pre-check if URL is from a music platform
+    if not is_music_platform(url):
+        logger.warning(f"Rejected non-music platform: {url}")
+        raise HTTPException(
+            status_code=400,
+            detail="URL must be from a music platform (YouTube, SoundCloud, Spotify, Bandcamp, etc.)"
+        )
     
-    # Check URL patterns - ONLY pure music platforms
-    music_domains = [
-        "youtube.com", "youtu.be", "music.youtube.com",
-        "soundcloud.com", "bandcamp.com", "spotify.com",
-        "audiomack.com", "mixcloud.com", "music.apple.com",
-        "deezer.com", "tidal.com",
-    ]
+    is_youtube = "youtube.com" in url or "youtu.be" in url or "music.youtube.com" in url
     
-    if any(domain in url_lower for domain in music_domains):
-        return True
-    
-    # Check extractor key if available
-    if extractor_key:
-        extractor_lower = extractor_key.lower()
-        if any(platform in extractor_lower for platform in MUSIC_PLATFORMS):
-            return True
-    
-    # Allow direct audio file URLs
-    if any(url_lower.endswith(ext) for ext in [".mp3", ".m4a", ".opus", ".flac", ".wav", ".aac", ".ogg"]):
-        return True
-    
+    # Try YouTube first (if it's a YouTube URL)
+    if is_youtube:
+        result = try_extract_stream(url, is_youtube=True)
+        
+        # If YouTube blocked, try alternatives
+        if result is None:
+            logger.warning("YouTube blocked, attempting alternative platforms...")
+            metadata = extract_metadata_from_youtube(url)
+            
+            if metadata:
+                logger.info(f"Searching alternatives for: {metadata['search_query']}")
+                
+                # First, try legacy API to find the song
+                legacy_result = await search_legacy_api(metadata['search_query'])
+                
+                if legacy_result:
+                    # Try to extract from the YouTube URL found by legacy API
+                    logger.info(f"Trying YouTube URL from legacy API: {legacy_result['youtube_url']}")
+                    result = try_extract_stream(legacy_result['youtube_url'], is_youtube=True)
+                    
+                    if result:
+                        result["found_via_legacy_api"] = True
+                        result["original_query"] = metadata["original_title"]
+                        logger.info("✓ Successfully extracted via legacy API YouTube link")
+                        return result
     # Allow HLS/DASH audio streams
     if ".m3u8" in url_lower or "stream" in url_lower:
         return True
