@@ -59,16 +59,22 @@ async def search_legacy_api(query: str):
                 
                 # Check if we have results
                 if data and isinstance(data, list) and len(data) > 0:
-                    # Get first result
+                    # Get first result - API returns: {videoId, title, artist, duration, thumbnail}
                     track = data[0]
-                    video_id = track.get("id") or track.get("videoId")
-                    title = track.get("title") or track.get("name")
+                    video_id = track.get("videoId")
+                    title = track.get("title", "Unknown")
+                    artist = track.get("artist", "Unknown")
+                    duration = track.get("duration", 0)
+                    thumbnail = track.get("thumbnail", "")
                     
                     if video_id:
-                        logger.info(f"✓ Legacy API found: {title} (ID: {video_id})")
+                        logger.info(f"✓ Legacy API found: {title} by {artist} (ID: {video_id})")
                         return {
                             "video_id": video_id,
                             "title": title,
+                            "artist": artist,
+                            "duration": duration,
+                            "thumbnail": thumbnail,
                             "youtube_url": f"https://www.youtube.com/watch?v={video_id}"
                         }
                 
