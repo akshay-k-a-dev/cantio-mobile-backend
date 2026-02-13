@@ -19,35 +19,26 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Music-focused platforms - only these are allowed
+# Music-focused platforms - only pure music sources allowed
 MUSIC_PLATFORMS = {
     # Primary music platforms
     "youtube", "youtubemusic", "soundcloud", "bandcamp", "spotify", 
     "audiomack", "mixcloud", "applemusic", "deezer", "tidal",
-    
-    # Music video platforms
-    "vimeo",  # Often has music videos
-    
-    # Social media with music content
-    "tiktok", "instagram", "twitter", "x",
-    
-    # Streaming platforms with music
-    "twitch",  # Has music streams
     
     # Direct audio sources
     "generic",  # For direct .mp3, .m3u8 links
 }
 
 def is_music_platform(url: str, extractor_key: str = None) -> bool:
-    """Check if URL is from a music-friendly platform"""
+    """Check if URL is from a pure music platform (no social media)"""
     url_lower = url.lower()
     
-    # Check URL patterns
+    # Check URL patterns - ONLY pure music platforms
     music_domains = [
         "youtube.com", "youtu.be", "music.youtube.com",
         "soundcloud.com", "bandcamp.com", "spotify.com",
         "audiomack.com", "mixcloud.com", "music.apple.com",
-        "deezer.com", "tidal.com", "tiktok.com",
+        "deezer.com", "tidal.com",
     ]
     
     if any(domain in url_lower for domain in music_domains):
@@ -78,94 +69,146 @@ def health_check():
 
 @app.get("/stream")
 def stream(url: str = Query(..., description="Music/audio URL from supported platforms")):
-    try:
-        # Pre-check if URL is from a music platform
-        if not is_music_platform(url):
-            logger.warning(f"Rejected non-music platform: {url}")
-            raise HTTPException(
-                status_code=400,
-                detail="URL must be from a music platform (YouTube, SoundCloud, Spotify, Bandcamp, TikTok, etc.)"
-            )
-        
-        # Base options for all platforms
-        ydl_opts = {
-            "format": "bestaudio/best",
-            "quiet": True,
-            "no_warnings": True,
-            "extract_flat": False,
-            "skip_download": True,
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept-Language": "en-US,en;q=0.9",
-            },
-        }
-        
-        # YouTube-specific optimizations
-        if "youtube.com" in url or "youtu.be" in url or "music.youtube.com" in url:
-            ydl_opts["extractor_args"] = {
-                "youtube": {
-                    "player_client": ["android", "android_music", "android_creator"],
-                    "skip": ["webpage"],
+    # Pre-check if URL is from a music platform
+    if not is_music_platform(url):
+        logger.warning(f"Rejected non-music platform: {url}")
+        raise HTTPException(
+            status_code=400,
+            detail="URL must be from a music platform (YouTube, SoundCloud, Spotify, Bandcamp, TikTok, etc.)"
+        )
+    
+    # Retry logic for bot detection
+    MAX_RETRIES = 3
+    last_error = None
+    
+    for attempt in range(MAX_RETRIES):
+        try:
+            # Base options for all platforms - FORCE AUDIO ONLY
+            ydl_opts = {
+                "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+                "quiet": True,
+                "no_warnings": True,
+                "extract_flat": False,
+                "skip_download": True,
+                "postprocessors": [{
+                    "key": "FFmpegExtractAudio",
+                    "preferredcodec": "best",
+                }],
+                "http_headers": {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept-Language": "en-US,en;q=0.9",
                 },
             }
-            ydl_opts["http_headers"]["User-Agent"] = "com.google.android.youtube/19.09.37 (Linux; U; Android 13) gzip"
-            logger.info("Using YouTube-specific optimizations")
-        
-        with YoutubeDL(ydl_opts) as ydl:
-            logger.info(f"Extracting from: {url}")
-            info = ydl.extract_info(url, download=False)
-        
-        if not info:
-            raise HTTPException(status_code=404, detail="No info extracted")
+            
+            # YouTube-specific optimizations
+            if "youtube.com" in url or "youtu.be" in url or "music.youtube.com" in url:
+                ydl_opts["extractor_args"] = {
+                    "youtube": {
+                        "player_client": ["android_music", "android"],
+                        "skip": ["webpage", "hls", "dash"],
+                    },
+                }
+                ydl_opts["http_headers"]["User-Agent"] = "com.google.android.youtube/19.09.37 (Linux; U; Android 13) gzip"
+                logger.info(f"Using YouTube-specific optimizations (attempt {attempt + 1})")
+            
+            with YoutubeDL(ydl_opts) as ydl:
+                logger.info(f"Extracting from: {url} (attempt {attempt + 1}/{MAX_RETRIES})")
+                info = ydl.extract_info(url, download=False)
+            
+            if not info:
+                raise HTTPException(status_code=404, detail="No info extracted")
+            
+            # Extract platform info first
+            extractor = info.get("extractor", "Unknown")
+            extractor_key = info.get("extractor_key", "Unknown")
+            
+            # Double-check extracted content is from music platform
+            if not is_music_platform(url, extractor_key):
+                logger.warning(f"Extracted from non-music platform: {extractor_key}")
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Platform '{extractor_key}' is not supported for music streaming"
+                )
 
-        stream_url = info.get("url")
+            stream_url = info.get("url")
 
-        if not stream_url:
-            formats = info.get("formats", [])
-            audio_formats = [f for f in formats if f.get("acodec") != "none" and f.get("vcodec") in (None, "none")]
-            if not audio_formats:
-                audio_formats = [f for f in formats if f.get("acodec") != "none"]
-            if audio_formats:
-                best = max(audio_formats, key=lambda f: f.get("abr") or f.get("tbr") or 0)
-                stream_url = best.get("url")
-# Double-check extracted content is from music platform
-        if not is_music_platform(url, extractor_key):
-            logger.warning(f"Extracted from non-music platform: {extractor_key}")
-            raise HTTPException(
-                status_code=400,
-                detail=f"Platform '{extractor_key}' is not supported for music streaming"
-            )
-        
-        
-        if not stream_url:
-            raise HTTPException(status_code=404, detail="No audio stream found")
+            if not stream_url:
+                formats = info.get("formats", [])
+                # STRICT audio-only filtering - NO VIDEO
+                audio_formats = [
+                    f for f in formats 
+                    if f.get("acodec") != "none" 
+                    and (f.get("vcodec") == "none" or f.get("vcodec") is None)
+                ]
+                
+                # If no pure audio, try formats with audio codec
+                if not audio_formats:
+                    audio_formats = [f for f in formats if f.get("acodec") != "none"]
+                    logger.warning("No pure audio formats found, falling back to formats with audio")
+                
+                if audio_formats:
+                    best = max(audio_formats, key=lambda f: f.get("abr") or f.get("tbr") or 0)
+                    stream_url = best.get("url")
+                    logger.info(f"Selected format: {best.get('format_id')} - codec: {best.get('acodec')}, vcodec: {best.get('vcodec')}")
 
-        # Extract platform info
-        extractor = info.get("extractor", "Unknown")
-        extractor_key = info.get("extractor_key", "Unknown")
-        
-        logger.info(f"✓ Successfully extracted from {extractor_key}: {info.get('title', 'Unknown')}")
-        
-        return {
-            "title": info.get("title", "Unknown"),
-            "stream_url": stream_url,
-            "platform": extractor_key,
-            "duration": info.get("duration"),
-            "thumbnail": info.get("thumbnail"),
-            "uploader": info.get("uploader"),
-        }
-        
-    except Exception as e:
-        error_msg = str(e)
-        logger.error(f"yt-dlp extraction failed for {url}: {error_msg}")
-        if "Sign in to confirm" in error_msg or "bot" in error_msg.lower():
-            raise HTTPException(
-                status_code=403,
-                detail="Platform blocked request. Try again later.",
-            )
-        if "Unsupported URL" in error_msg:
-            raise HTTPException(
-                status_code=400,
-                detail="URL not supported by yt-dlp",
-            )
-        raise HTTPException(status_code=500, detail=error_msg)
+            if not stream_url:
+                raise HTTPException(status_code=404, detail="No audio stream found")
+            
+            logger.info(f"✓ Successfully extracted from {extractor_key}: {info.get('title', 'Unknown')}")
+            
+            return {
+                "title": info.get("title", "Unknown"),
+                "stream_url": stream_url,
+                "platform": extractor_key,
+                "duration": info.get("duration"),
+                "thumbnail": info.get("thumbnail"),
+                "uploader": info.get("uploader"),
+            }
+            
+        except HTTPException:
+            # Re-raise HTTP exceptions immediately
+            raise
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"✗ Attempt {attempt + 1}/{MAX_RETRIES} failed: {last_error}")
+            
+            # If bot detection on YouTube, suggest alternatives
+            if "Sign in to confirm" in last_error or "bot" in last_error.lower():
+                if "youtube.com" in url or "youtu.be" in url:
+                    logger.error(f"YouTube blocked after {attempt + 1} attempts: {url}")
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "YouTube blocked request from datacenter IP",
+                            "suggestion": "Try alternative platforms: SoundCloud, Bandcamp, Spotify, or use phone server for YouTube",
+                            "alternatives": [
+                                "https://soundcloud.com",
+                                "https://bandcamp.com",
+                                "https://music.apple.com",
+                                "https://audiomack.com"
+                            ]
+                        }
+                    )
+                
+                # For non-YouTube platforms, retry with backoff
+                if attempt < MAX_RETRIES - 1:
+                    import time
+                    backoff = (attempt + 1) * 2
+                    logger.info(f"Bot detected, retrying in {backoff}s...")
+                    time.sleep(backoff)
+                    continue
+            
+            # If this was the last attempt, raise the error
+            if attempt == MAX_RETRIES - 1:
+                logger.error(f"All {MAX_RETRIES} attempts failed for {url}")
+                if "Sign in to confirm" in last_error or "bot" in last_error.lower():
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Platform blocked request. Try alternative music platforms or use phone server.",
+                    )
+                if "Unsupported URL" in last_error:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="URL not supported by yt-dlp",
+                    )
+                raise HTTPException(status_code=500, detail=last_error)
