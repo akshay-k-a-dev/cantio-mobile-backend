@@ -26,8 +26,10 @@ jobs:
       - name: Cleanup existing Tailscale connection
         run: |
           echo "🧹 Cleaning up any existing Tailscale connections..."
-          sudo tailscale logout || true
-          sudo rm -f /var/lib/tailscale/tailscaled.state || true
+          sudo systemctl stop tailscaled || true
+          sudo rm -rf /var/lib/tailscale/* || true
+          sudo systemctl start tailscaled
+          sleep 2
       
       - name: Connect to Tailscale
         uses: tailscale/github-action@v2
@@ -90,21 +92,35 @@ jobs:
       
       - name: Start proxy server
         run: |
-          uvicorn proxy:app --host 0.0.0.0 --port 8080 &
+          echo "🚀 Starting FastAPI proxy server..."
+          uvicorn proxy:app --host 127.0.0.1 --port 8080 &
           PROXY_PID=$!
           echo "PROXY_PID=$PROXY_PID" >> $GITHUB_ENV
-          sleep 5
-          echo "✅ Proxy server started (PID: $PROXY_PID)"
+          
+          # Wait for server to be ready
+          echo "⏳ Waiting for server to start..."
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:8080/kaithhealthcheck > /dev/null 2>&1; then
+              echo "✅ Proxy server is responding (PID: $PROXY_PID)"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "❌ Server failed to start"
+              exit 1
+            fi
+            sleep 1
+          done
       
       - name: Enable Tailscale Funnel
         run: |
           echo "🌐 Setting up Tailscale Serve and Funnel for public access..."
           
-          # Set up serve to proxy HTTPS/443 traffic to localhost:8080
-          sudo tailscale serve https:443 / http://localhost:8080
-          sleep 2
+          # Set up serve to proxy HTTPS traffic to localhost:8080
+          echo "📝 Configuring serve..."
+          sudo tailscale serve https:443 / http://127.0.0.1:8080
+          sleep 3
           
-          # Check serve status before enabling funnel
+          # Check serve status
           echo "📋 Serve configuration:"
           sudo tailscale serve status
           
@@ -126,6 +142,11 @@ jobs:
           # Final status check
           echo "✅ Final configuration:"
           sudo tailscale serve status
+          
+          # Test local access through Tailscale
+          echo "🧪 Testing local Tailscale access..."
+          sleep 2
+          curl -v http://127.0.0.1:8080/kaithhealthcheck || echo "⚠️ Local test failed"
           
           echo "⏰ Proxy will run for 6 hours or until manually stopped"
       
