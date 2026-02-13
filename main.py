@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 from yt_dlp import YoutubeDL
@@ -14,6 +15,9 @@ app = FastAPI()
 def health_check():
     return {"status": "ok"}
 
+# Proxy configuration (optional - set PROXY_URL env var if needed)
+PROXY_URL = os.getenv("PROXY_URL")  # e.g., "http://user:pass@proxy-host:port"
+
 YDL_OPTS = {
     "format": "bestaudio/best",
     "quiet": True,
@@ -22,15 +26,19 @@ YDL_OPTS = {
     "skip_download": True,
     "extractor_args": {
         "youtube": {
-            "player_client": ["android_vr", "web_creator", "ios"],
+            "player_client": ["android", "android_music", "android_creator"],
+            "skip": ["webpage"],
         },
     },
     "http_headers": {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "User-Agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 13) gzip",
         "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.youtube.com/",
     },
 }
+
+if PROXY_URL:
+    YDL_OPTS["proxy"] = PROXY_URL
+    logger.info(f"Using proxy: {PROXY_URL.split('@')[-1] if '@' in PROXY_URL else PROXY_URL}")
 
 # Cookies disabled - using player_client bypass instead
 
