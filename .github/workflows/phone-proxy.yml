@@ -94,12 +94,12 @@ jobs:
         run: |
           echo "🌐 Setting up Tailscale Serve and Funnel for public access..."
           
-          # First, set up serve on port 8080
-          sudo tailscale serve --bg 8080
+          # Set up serve to proxy HTTPS traffic to localhost:8080
+          sudo tailscale serve https / http://localhost:8080
           sleep 2
           
           # Enable funnel for public internet access
-          sudo tailscale funnel 8080 on
+          sudo tailscale funnel on
           sleep 3
           
           # Get the funnel URL
@@ -109,17 +109,20 @@ jobs:
           echo ""
           echo "FUNNEL_URL=https://$FUNNEL_URL" >> $GITHUB_ENV
           
+          # Show serve status
+          sudo tailscale serve status
+          
           echo "⏰ Proxy will run for 6 hours or until manually stopped"
       
       - name: Keep alive
         run: |
-          trap 'echo "🛑 Received cancellation signal"; kill $PROXY_PID 2>/dev/null; sudo tailscale funnel 8080 off; sudo tailscale serve off; tailscale logout; exit 0' SIGTERM SIGINT
+          trap 'echo "🛑 Received cancellation signal"; kill $PROXY_PID 2>/dev/null; sudo tailscale funnel off; sudo tailscale serve reset; tailscale logout; exit 0' SIGTERM SIGINT
           
           while true; do
             if ! kill -0 $PROXY_PID 2>/dev/null; then
               echo "❌ Proxy process died unexpectedly"
-              sudo tailscale funnel 8080 off
-              sudo tailscale serve off
+              sudo tailscale funnel off
+              sudo tailscale serve reset
               exit 1
             fi
             
