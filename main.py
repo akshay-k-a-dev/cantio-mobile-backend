@@ -5,8 +5,6 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from yt_dlp import YoutubeDL
 import re
-from pytubefix import YouTube
-from pytubefix.innertube import InnerTube
 import httpx
 
 logging.basicConfig(level=logging.INFO)
@@ -86,76 +84,55 @@ async def search_legacy_api(query: str):
         return None
 
 def extract_metadata_from_youtube(url: str):
-    """Extract song metadata from YouTube URL using InnerTube API"""
+    """Extract song metadata from YouTube URL using yt-dlp"""
     try:
-        # Use pytubefix with InnerTube for fast metadata extraction
-        logger.info(f"Extracting metadata via InnerTube for: {url}")
+        logger.info(f"Extracting metadata for: {url}")
         
-        yt = YouTube(url)
-        
-        title = yt.title or ""
-        author = yt.author or ""
-        
-        # Clean up title to extract song/artist
-        # Remove common patterns like "Official Video", "[Official]", etc.
-        clean_title = re.sub(
-            r'\[.*?\]|\(.*?\)|official|video|audio|lyrics|hd|4k|music video|mv|ft\.|feat\.',
-            '', 
-            title, 
-            flags=re.IGNORECASE
-        )
-        clean_title = clean_title.strip()
-        
-        # Try to parse artist - song format
-        if " - " in clean_title:
-            parts = clean_title.split(" - ", 1)
-            artist = parts[0].strip()
-            song = parts[1].strip()
-        else:
-            artist = author
-            song = clean_title
-        
-        search_query = f"{song} {artist}".strip()
-        
-        logger.info(f"✓ InnerTube metadata - Song: {song}, Artist: {artist}")
-        
-        return {
-            "title": song,
-            "artist": artist,
-            "original_title": title,
-            "search_query": search_query,
-            "duration": yt.length,
-            "thumbnail": yt.thumbnail_url,
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "extract_flat": True,
+            "skip_download": True,
         }
-    except Exception as e:
-        logger.error(f"InnerTube extraction failed: {e}, falling back to yt-dlp")
         
-        # Fallback to yt-dlp if InnerTube fails
-        try:
-            ydl_opts = {
-                "quiet": True,
-                "no_warnings": True,
-                "extract_flat": True,
-                "skip_download": True,
+        with YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            title = info.get("title", "")
+            uploader = info.get("uploader", "")
+            
+            # Clean up title to extract song/artist
+            clean_title = re.sub(
+                r'\[.*?\]|\(.*?\)|official|video|audio|lyrics|hd|4k|music video|mv|ft\.|feat\.',
+                '', 
+                title, 
+                flags=re.IGNORECASE
+            )
+            clean_title = clean_title.strip()
+            
+            # Try to parse artist - song format
+            if " - " in clean_title:
+                parts = clean_title.split(" - ", 1)
+                artist = parts[0].strip()
+                song = parts[1].strip()
+            else:
+                artist = uploader
+                song = clean_title
+            
+            search_query = f"{song} {artist}".strip()
+            
+            logger.info(f"✓ Metadata extracted - Song: {song}, Artist: {artist}")
+            
+            return {
+                "title": song,
+                "artist": artist,
+                "original_title": title,
+                "search_query": search_query,
+                "duration": info.get("duration"),
+                "thumbnail": info.get("thumbnail"),
             }
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=False)
-                title = info.get("title", "")
-                uploader = info.get("uploader", "")
-                
-                clean_title = re.sub(r'\[.*?\]|\(.*?\)|official|video|audio|lyrics|hd|4k', '', title, flags=re.IGNORECASE)
-                clean_title = clean_title.strip()
-                
-                logger.info(f"✓ yt-dlp fallback - Title: {clean_title}, Uploader: {uploader}")
-                return {
-                    "title": clean_title,
-                    "artist": uploader,
-                    "original_title": title,
-                    "search_query": f"{clean_title} {uploader}".strip()
-                }
-        except Exception as e2:
-            logger.error(f"Both InnerTube and yt-dlp failed: {e2}")
-            return None
+    except Exception as e:
+        logger.error(f"Metadata extraction failed: {e}")
+        return None
 
 def search_alternative_platform(metadata: dict, platform_name: str, search_base: str):
     """Search for song on alternative platform"""
