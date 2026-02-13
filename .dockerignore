@@ -1,0 +1,8 @@
+cookies.txt
+__pycache__
+*.pyc
+.git
+.gitignore
+venv/
+.vscode/
+*.md

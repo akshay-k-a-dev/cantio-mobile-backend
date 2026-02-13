@@ -15,7 +15,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY . .
+# Copy only necessary files - exclude cookies.txt
+COPY main.py .
+# COPY cookies.txt . # Removed - using player_client bypass instead
 
 EXPOSE 8080
 
