@@ -1,7 +1,11 @@
+import os
+from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 from yt_dlp import YoutubeDL
 
 app = FastAPI()
+
+COOKIES_FILE = Path(__file__).parent / "cookies.txt"
 
 YDL_OPTS = {
     "format": "bestaudio/best",
@@ -9,7 +13,17 @@ YDL_OPTS = {
     "no_warnings": True,
     "extract_flat": False,
     "skip_download": True,
+    "js_runtimes": "node",
+    "remote_components": {"ejs": "github"},
+    "http_headers": {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.youtube.com/",
+    },
 }
+
+if COOKIES_FILE.exists():
+    YDL_OPTS["cookiefile"] = str(COOKIES_FILE)
 
 
 @app.get("/stream")

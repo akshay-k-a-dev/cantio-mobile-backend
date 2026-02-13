@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# Sensitive files - DO NOT COMMIT
+cookies.txt
+youtube-cookies.txt
+*.cookies
+
+# Cache
+.yt-dlp-cache/
+
+# Environment
+.env
+.env.local
