@@ -28,6 +28,7 @@ jobs:
         with:
           authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
           tags: tag:ci
+          hostname: cantio-github-proxy
       
       - name: Create proxy server
         run: |
