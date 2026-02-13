@@ -19,6 +19,56 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Music-focused platforms - only these are allowed
+MUSIC_PLATFORMS = {
+    # Primary music platforms
+    "youtube", "youtubemusic", "soundcloud", "bandcamp", "spotify", 
+    "audiomack", "mixcloud", "applemusic", "deezer", "tidal",
+    
+    # Music video platforms
+    "vimeo",  # Often has music videos
+    
+    # Social media with music content
+    "tiktok", "instagram", "twitter", "x",
+    
+    # Streaming platforms with music
+    "twitch",  # Has music streams
+    
+    # Direct audio sources
+    "generic",  # For direct .mp3, .m3u8 links
+}
+
+def is_music_platform(url: str, extractor_key: str = None) -> bool:
+    """Check if URL is from a music-friendly platform"""
+    url_lower = url.lower()
+    
+    # Check URL patterns
+    music_domains = [
+        "youtube.com", "youtu.be", "music.youtube.com",
+        "soundcloud.com", "bandcamp.com", "spotify.com",
+        "audiomack.com", "mixcloud.com", "music.apple.com",
+        "deezer.com", "tidal.com", "tiktok.com",
+    ]
+    
+    if any(domain in url_lower for domain in music_domains):
+        return True
+    
+    # Check extractor key if available
+    if extractor_key:
+        extractor_lower = extractor_key.lower()
+        if any(platform in extractor_lower for platform in MUSIC_PLATFORMS):
+            return True
+    
+    # Allow direct audio file URLs
+    if any(url_lower.endswith(ext) for ext in [".mp3", ".m4a", ".opus", ".flac", ".wav", ".aac", ".ogg"]):
+        return True
+    
+    # Allow HLS/DASH audio streams
+    if ".m3u8" in url_lower or "stream" in url_lower:
+        return True
+    
+    return False
+
 
 @app.get("/kaithhealthcheck")
 @app.get("/kaithheathcheck")
@@ -27,8 +77,16 @@ def health_check():
 
 
 @app.get("/stream")
-def stream(url: str = Query(..., description="Any video/audio URL supported by yt-dlp")):
+def stream(url: str = Query(..., description="Music/audio URL from supported platforms")):
     try:
+        # Pre-check if URL is from a music platform
+        if not is_music_platform(url):
+            logger.warning(f"Rejected non-music platform: {url}")
+            raise HTTPException(
+                status_code=400,
+                detail="URL must be from a music platform (YouTube, SoundCloud, Spotify, Bandcamp, TikTok, etc.)"
+            )
+        
         # Base options for all platforms
         ydl_opts = {
             "format": "bestaudio/best",
@@ -70,7 +128,15 @@ def stream(url: str = Query(..., description="Any video/audio URL supported by y
             if audio_formats:
                 best = max(audio_formats, key=lambda f: f.get("abr") or f.get("tbr") or 0)
                 stream_url = best.get("url")
-
+# Double-check extracted content is from music platform
+        if not is_music_platform(url, extractor_key):
+            logger.warning(f"Extracted from non-music platform: {extractor_key}")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Platform '{extractor_key}' is not supported for music streaming"
+            )
+        
+        
         if not stream_url:
             raise HTTPException(status_code=404, detail="No audio stream found")
 
