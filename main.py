@@ -27,27 +27,34 @@ def health_check():
 
 
 @app.get("/stream")
-def stream(url: str = Query(..., description="YouTube video URL")):
+def stream(url: str = Query(..., description="Any video/audio URL supported by yt-dlp")):
     try:
+        # Base options for all platforms
         ydl_opts = {
             "format": "bestaudio/best",
             "quiet": True,
             "no_warnings": True,
             "extract_flat": False,
             "skip_download": True,
-            "extractor_args": {
-                "youtube": {
-                    "player_client": ["android", "android_music", "android_creator"],
-                    "skip": ["webpage"],
-                },
-            },
             "http_headers": {
-                "User-Agent": "com.google.android.youtube/19.09.37 (Linux; U; Android 13) gzip",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 "Accept-Language": "en-US,en;q=0.9",
             },
         }
         
+        # YouTube-specific optimizations
+        if "youtube.com" in url or "youtu.be" in url or "music.youtube.com" in url:
+            ydl_opts["extractor_args"] = {
+                "youtube": {
+                    "player_client": ["android", "android_music", "android_creator"],
+                    "skip": ["webpage"],
+                },
+            }
+            ydl_opts["http_headers"]["User-Agent"] = "com.google.android.youtube/19.09.37 (Linux; U; Android 13) gzip"
+            logger.info("Using YouTube-specific optimizations")
+        
         with YoutubeDL(ydl_opts) as ydl:
+            logger.info(f"Extracting from: {url}")
             info = ydl.extract_info(url, download=False)
         
         if not info:
@@ -67,9 +74,19 @@ def stream(url: str = Query(..., description="YouTube video URL")):
         if not stream_url:
             raise HTTPException(status_code=404, detail="No audio stream found")
 
+        # Extract platform info
+        extractor = info.get("extractor", "Unknown")
+        extractor_key = info.get("extractor_key", "Unknown")
+        
+        logger.info(f"✓ Successfully extracted from {extractor_key}: {info.get('title', 'Unknown')}")
+        
         return {
             "title": info.get("title", "Unknown"),
             "stream_url": stream_url,
+            "platform": extractor_key,
+            "duration": info.get("duration"),
+            "thumbnail": info.get("thumbnail"),
+            "uploader": info.get("uploader"),
         }
         
     except Exception as e:
@@ -78,6 +95,11 @@ def stream(url: str = Query(..., description="YouTube video URL")):
         if "Sign in to confirm" in error_msg or "bot" in error_msg.lower():
             raise HTTPException(
                 status_code=403,
-                detail="YouTube blocked request. Try again later.",
+                detail="Platform blocked request. Try again later.",
+            )
+        if "Unsupported URL" in error_msg:
+            raise HTTPException(
+                status_code=400,
+                detail="URL not supported by yt-dlp",
             )
         raise HTTPException(status_code=500, detail=error_msg)
