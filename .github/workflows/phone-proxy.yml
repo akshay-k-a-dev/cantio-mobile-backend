@@ -26,10 +26,10 @@ jobs:
       - name: Cleanup existing Tailscale connection
         run: |
           echo "🧹 Cleaning up any existing Tailscale connections..."
-          sudo systemctl stop tailscaled || true
+          # GitHub Actions doesn't use systemd, just clean state files
+          sudo pkill tailscaled || true
           sudo rm -rf /var/lib/tailscale/* || true
-          sudo systemctl start tailscaled
-          sleep 2
+          sleep 1
       
       - name: Connect to Tailscale
         uses: tailscale/github-action@v2
