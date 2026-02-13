@@ -9,44 +9,22 @@ This uses GitHub Actions as a persistent proxy that:
 
 ## Setup Steps
 
-### 1. Create Tailscale OAuth Client
+### 1. Use Your Existing Tailscale Auth Key
 
-Go to https://login.tailscale.com/admin/settings/oauth
+You already have a Tailscale auth key (starts with `tskey-auth-...`).
 
-1. Click **Generate OAuth client**
-2. Add tags: `tag:ci`
-3. Copy the **Client ID** and **Client Secret**
-
-### 2. Add GitHub Secrets
+### 2. Add GitHub Secret
 
 In your GitHub repo: Settings → Secrets and variables → Actions
 
-Add these secrets:
+Add this secret:
 ```
-TAILSCALE_OAUTH_CLIENT_ID=<your-client-id>
-TAILSCALE_OAUTH_SECRET=<your-client-secret>
-```
-
-### 3. Configure ACL for CI tag
-
-In Tailscale Admin → Access Controls, add:
-
-```json
-{
-  "tagOwners": {
-    "tag:ci": ["autogroup:admin"]
-  },
-  "acls": [
-    {
-      "action": "accept",
-      "src": ["tag:ci"],
-      "dst": ["*:*"]
-    }
-  ]
-}
+TAILSCALE_AUTHKEY=tskey-auth-xxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
-### 4. Start Phone Backend
+(Use the same auth key you have)
+
+### 3. Start Phone Backend
 
 On your phone (Termux):
 ```bash
@@ -54,14 +32,14 @@ cd cantio-mobile-backend
 python -m uvicorn main:app --host 0.0.0.0 --port 8081
 ```
 
-### 5. Run GitHub Action
+### 4. Run GitHub Action
 
 1. Go to your repo → Actions tab
 2. Click "Phone Proxy via Tailscale"
 3. Click "Run workflow"
 4. Wait ~30 seconds
 5. Open the workflow run logs
-6. Find the **Cloudflare Tunnel URL** in the logs (e.g., `https://xyz.trycloudflare.com`)
+6. F5nd the **Cloudflare Tunnel URL** in the logs (e.g., `https://xyz.trycloudflare.com`)
 
 ### 6. Update Leapcell
 

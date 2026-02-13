@@ -26,9 +26,8 @@ jobs:
       - name: Install and setup Tailscale
         uses: tailscale/github-action@v2
         with:
-          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
-          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
-          tags: tag:ci
+          authkey: ${{ secrets.TAILSCALE_AUTHKEY }}
+          hostname: github-actions-proxy
       
       - name: Wait for Tailscale connection
         run: |
@@ -54,7 +53,7 @@ jobs:
           curl -f http://localhost:8081/kaithhealthcheck || echo "Proxy not ready yet"
           
           echo "Starting Cloudflare tunnel..."
-          cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
+          cloudflared tunnel --url http://localhost:8081 > tunnel.log 2>&1 &
           TUNNEL_PID=$!
           
           sleep 10
