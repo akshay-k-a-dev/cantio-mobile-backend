@@ -1,0 +1,71 @@
+name: Phone Proxy via Tailscale
+
+on:
+  workflow_dispatch:  # Manual trigger
+  schedule:
+    - cron: '*/30 * * * *'  # Re-trigger every 30 min to keep alive
+
+jobs:
+  proxy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360  # 6 hours max
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install fastapi uvicorn httpx
+      
+      - name: Install and setup Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          tags: tag:ci
+      
+      - name: Wait for Tailscale connection
+        run: |
+          echo "Waiting for Tailscale to connect..."
+          sleep 5
+          tailscale status
+          echo "Pinging phone..."
+          ping -c 3 100.87.250.20 || echo "Phone not reachable yet"
+      
+      - name: Install cloudflared
+        run: |
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+          sudo dpkg -i cloudflared-linux-amd64.deb
+      
+      - name: Start proxy server
+        run: |
+          echo "Starting proxy server..."
+          python proxy_server.py &
+          PROXY_PID=$!
+          sleep 5
+          
+          echo "Testing local proxy..."
+          curl -f http://localhost:8081/kaithhealthcheck || echo "Proxy not ready yet"
+          
+          echo "Starting Cloudflare tunnel..."
+          cloudflared tunnel --url http://localhost:8080 > tunnel.log 2>&1 &
+          TUNNEL_PID=$!
+          
+          sleep 10
+          echo "=== Cloudflare Tunnel URL ==="
+          grep -o 'https://[^ ]*\.trycloudflare\.com' tunnel.log | head -1 | tee tunnel_url.txt
+          echo "=============================="
+          
+          # Keep running
+          echo "Proxy is running. Press Ctrl+C to stop."
+          tail -f tunnel.log
+        env:
+          PHONE_IP: 100.87.250.20
+          PHONE_PORT: 8081
+          SKIP_CHECKS: "true"
