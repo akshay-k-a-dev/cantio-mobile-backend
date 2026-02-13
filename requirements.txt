@@ -1,9 +1,3 @@
 fastapi
-uvicorn
-yt-dlp
-pycryptodomex
-brotli
-certifi
-mutagen
-websockets
-yt-dlp-ejs
+uvicorn[standard]
+yt-dlp[default]
