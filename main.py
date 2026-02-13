@@ -136,6 +136,79 @@ def health_check():
 
 @app.get("/stream")
 def stream(url: str = Query(..., description="Music/audio URL from supported platforms")):
+    # Pre-check if URL is from a music platform
+    if not is_music_platform(url):
+        logger.warning(f"Rejected non-music platform: {url}")
+        raise HTTPException(
+            status_code=400,
+            detail="URL must be from a music platform (YouTube, SoundCloud, Spotify, Bandcamp, etc.)"
+        )
+    
+    is_youtube = "youtube.com" in url or "youtu.be" in url or "music.youtube.com" in url
+    
+    # Try YouTube first (if it's a YouTube URL)
+    if is_youtube:
+        result = try_extract_stream(url, is_youtube=True)
+        
+        # If YouTube blocked, try alternatives
+        if result is None:
+            logger.warning("YouTube blocked, attempting alternative platforms...")
+            metadata = extract_metadata_from_youtube(url)
+            
+            if metadata:
+                logger.info(f"Searching alternatives for: {metadata['search_query']}")
+                
+                # Try each alternative platform
+                for platform_name, search_base in ALTERNATIVE_PLATFORMS:
+                    logger.info(f"Trying {platform_name}...")
+                    
+                    # Search and get the URL from alternative platform
+                    search_query = metadata["search_query"]
+                    alternative_url = None
+                    
+                    try:
+                        # Use yt-dlp's search to find song on platform
+                        if platform_name == "soundcloud":
+                            alternative_url = f"scsearch1:{search_query}"
+                        elif platform_name == "audiomack":
+                            # Direct search on audiomack
+                            alternative_url = f"https://audiomack.com/search?q={search_query.replace(' ', '+')}"
+                        elif platform_name == "bandcamp":
+                            # Bandcamp search
+                            alternative_url = f"https://bandcamp.com/search?q={search_query.replace(' ', '+')}"
+                        
+                        if alternative_url:
+                            result = try_extract_stream(alternative_url, is_youtube=False, platform_name=platform_name)
+                            
+                            if result:
+                                result["fallback_from_youtube"] = True
+                                result["original_query"] = metadata["original_title"]
+                                logger.info(f"✓ Found alternative on {platform_name}")
+                                return result
+                    except Exception as e:
+                        logger.warning(f"Failed to search {platform_name}: {e}")
+                        continue
+                
+                # If all alternatives failed
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"YouTube blocked and couldn't find '{metadata['original_title']}' on alternative platforms. Try SoundCloud/Bandcamp directly."
+                )
+            else:
+                raise HTTPException(
+                    status_code=503,
+                    detail="YouTube blocked and couldn't extract metadata for alternative search."
+                )
+        
+        return result
+    else:
+        # Non-YouTube URL - try directly
+        result = try_extract_stream(url, is_youtube=False)
+        if result is None:
+            raise HTTPException(status_code=500, detail="Failed to extract stream")
+        return result
+
+
 def try_extract_stream(url: str, is_youtube: bool = False, platform_name: str = None, max_retries: int = 2):
     """Try to extract stream from URL with retry logic"""
     last_error = None
@@ -239,77 +312,3 @@ def try_extract_stream(url: str, is_youtube: bool = False, platform_name: str = 
                 continue
     
     return None
-
-            stream_url = info.get("url")
-
-            if not stream_url:
-                formats = info.get("formats", [])
-                # STRICT audio-only filtering - NO VIDEO
-                audio_formats = [
-                    f for f in formats 
-                    if f.get("acodec") != "none" 
-                    and (f.get("vcodec") == "none" or f.get("vcodec") is None)
-                ]
-                
-                # If no pure audio, try formats with audio codec
-                if not audio_formats:
-                    audio_formats = [f for f in formats if f.get("acodec") != "none"]
-                    logger.warning("No pure audio formats found, falling back to formats with audio")
-                
-                if audio_formats:
-                    best = max(audio_formats, key=lambda f: f.get("abr") or f.get("tbr") or 0)
-                    stream_url = best.get("url")
-                    logger.info(f"Selected format: {best.get('format_id')} - codec: {best.get('acodec')}, vcodec: {best.get('vcodec')}")
-
-            if not stream_url:
-                raise HTTPException(status_code=404, detail="No audio stream found")
-            
-            logger.info(f"✓ Successfully extracted from {extractor_key}: {info.get('title', 'Unknown')}")
-            
-            return {
-                "title": info.get("title", "Unknown"),
-                "stream_url": stream_url,
-                "platform": extractor_key,
-                "duration": info.get("duration"),
-                "thumbnail": info.get("thumbnail"),
-                "uploader": info.get("uploader"),
-            }
-            
-        except HTTPException:
-            # Re-raise HTTP exceptions immediately
-            raise
-        except Exception as e:
-            last_error = str(e)
-            logger.warning(f"✗ Attempt {attempt + 1}/{MAX_RETRIES} failed: {last_error}")
-            
-            # If bot detection on YouTube, suggest alternatives
-            if "Sign in to confirm" in last_error or "bot" in last_error.lower():
-                if "youtube.com" in url or "youtu.be" in url:
-                    logger.error(f"YouTube blocked after {attempt + 1} attempts: {url}")
-                    raise HTTPException(
-                        status_code=503,
-                        detail="YouTube doesn't work from cloud servers. Use SoundCloud, Bandcamp, Spotify, Apple Music, or Audiomack instead. For YouTube, use the phone server proxy."
-                    )
-                
-                # For non-YouTube platforms, retry with backoff
-                if attempt < MAX_RETRIES - 1:
-                    import time
-                    backoff = (attempt + 1) * 2
-                    logger.info(f"Bot detected, retrying in {backoff}s...")
-                    time.sleep(backoff)
-                    continue
-            
-            # If this was the last attempt, raise the error
-            if attempt == MAX_RETRIES - 1:
-                logger.error(f"All {MAX_RETRIES} attempts failed for {url}")
-                if "Sign in to confirm" in last_error or "bot" in last_error.lower():
-                    raise HTTPException(
-                        status_code=403,
-                        detail="Platform blocked request. Try alternative music platforms or use phone server.",
-                    )
-                if "Unsupported URL" in last_error:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="URL not supported by yt-dlp",
-                    )
-                raise HTTPException(status_code=500, detail=last_error)
