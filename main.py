@@ -62,7 +62,13 @@ USER_AGENTS = [
 ]
 
 # YouTube client configurations - each bypasses different restrictions
+# android_vr is currently the most reliable (as of March 2026)
 YOUTUBE_CLIENTS = [
+    {
+        "name": "android_vr",
+        "player_client": ["android_vr"],
+        "user_agent": "com.google.android.apps.youtube.vr.oculus/1.57.29 (Linux; U; Android 12; Quest 2 Build/SQ3A.220605.009.A1) gzip",
+    },
     {
         "name": "android_music",
         "player_client": ["android_music"],
@@ -77,11 +83,6 @@ YOUTUBE_CLIENTS = [
         "name": "web",
         "player_client": ["web"],
         "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-    },
-    {
-        "name": "tv",
-        "player_client": ["tv_embedded"],
-        "user_agent": "Mozilla/5.0 (SMART-TV; Linux; Tizen 5.0) AppleWebKit/537.36 Chrome/79.0.3945.130 Safari/537.36",
     },
 ]
 
