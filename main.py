@@ -3,8 +3,9 @@ import os
 import random
 from pathlib import Path
 from functools import lru_cache
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from yt_dlp import YoutubeDL
 import re
 import httpx
@@ -504,3 +505,132 @@ def cache_clear():
     """Debug endpoint to clear cache"""
     _stream_cache.clear()
     return {"status": "cleared"}
+
+
+@app.get("/proxy")
+async def proxy_stream(
+    url: str = Query(..., description="YouTube or music URL to proxy"),
+    video_id: str = Query(None, description="YouTube video ID (shortcut, avoids URL parsing)")
+):
+    """
+    Proxy streaming endpoint - extracts audio and streams it directly to the client.
+    This bypasses YouTube's IP-binding restriction since the backend fetches and forwards the data.
+    
+    Optimized for LeapCell (900s timeout, 100MB payload limit).
+    Streams in chunks to avoid memory issues with large files.
+    """
+    # Build URL from video_id if provided
+    if video_id:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+    
+    if not is_music_platform(url):
+        raise HTTPException(
+            status_code=400,
+            detail="URL must be from a music platform"
+        )
+    
+    is_youtube = "youtube.com" in url or "youtu.be" in url or "music.youtube.com" in url
+    
+    # Extract stream URL
+    result = try_extract_stream(url, is_youtube=is_youtube)
+    
+    if not result or not result.get("stream_url"):
+        raise HTTPException(
+            status_code=503,
+            detail="Failed to extract stream URL"
+        )
+    
+    stream_url = result["stream_url"]
+    title = result.get("title", "Unknown")
+    audio_format = result.get("audio_format", "webm")
+    
+    # Determine content type
+    content_type_map = {
+        "webm": "audio/webm",
+        "m4a": "audio/mp4",
+        "mp3": "audio/mpeg",
+        "opus": "audio/opus",
+        "ogg": "audio/ogg",
+        "aac": "audio/aac",
+    }
+    content_type = content_type_map.get(audio_format, "audio/webm")
+    
+    logger.info(f"Proxying stream for: {title} ({content_type})")
+    
+    async def stream_generator():
+        """Stream audio data in chunks"""
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
+            try:
+                async with client.stream("GET", stream_url, headers={
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "*/*",
+                    "Accept-Encoding": "identity",  # Don't compress, we're streaming
+                    "Range": "bytes=0-",  # Request full file
+                }) as response:
+                    if response.status_code >= 400:
+                        logger.error(f"Upstream returned {response.status_code}")
+                        return
+                    
+                    # Stream in 64KB chunks for smooth playback
+                    async for chunk in response.aiter_bytes(chunk_size=65536):
+                        yield chunk
+                        
+            except Exception as e:
+                logger.error(f"Proxy streaming error: {e}")
+                return
+    
+    # Return streaming response with appropriate headers
+    return StreamingResponse(
+        stream_generator(),
+        media_type=content_type,
+        headers={
+            "Content-Disposition": f'inline; filename="{title}.{audio_format}"',
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "no-cache",
+            "X-Content-Title": title,
+            "X-Content-Platform": result.get("platform", "Unknown"),
+            "X-Content-Duration": str(result.get("duration", 0)),
+        }
+    )
+
+
+@app.get("/proxy/info")
+async def proxy_info(
+    url: str = Query(None, description="YouTube or music URL"),
+    video_id: str = Query(None, description="YouTube video ID")
+):
+    """
+    Get stream info without proxying - returns metadata and a proxy URL.
+    The client can then use the proxy URL for playback.
+    """
+    if video_id:
+        url = f"https://www.youtube.com/watch?v={video_id}"
+    
+    if not url:
+        raise HTTPException(status_code=400, detail="Either url or video_id is required")
+    
+    if not is_music_platform(url):
+        raise HTTPException(status_code=400, detail="URL must be from a music platform")
+    
+    is_youtube = "youtube.com" in url or "youtu.be" in url or "music.youtube.com" in url
+    
+    result = try_extract_stream(url, is_youtube=is_youtube)
+    
+    if not result:
+        raise HTTPException(status_code=503, detail="Failed to extract stream info")
+    
+    # Build proxy URL for the client to use
+    if video_id:
+        proxy_url = f"/proxy?video_id={video_id}"
+    else:
+        proxy_url = f"/proxy?url={url}"
+    
+    return {
+        "title": result.get("title"),
+        "duration": result.get("duration"),
+        "thumbnail": result.get("thumbnail"),
+        "uploader": result.get("uploader"),
+        "platform": result.get("platform"),
+        "audio_format": result.get("audio_format"),
+        "proxy_url": proxy_url,
+    }
