@@ -15,6 +15,12 @@ youtube-cookies.txt
 
 # Cache
 .yt-dlp-cache/
+/cache/
+*.pkl
+
+# Test files
+test_soundcloud_lib.py
+test_soundcloud_simple.py
 
 # Environment
 .env
