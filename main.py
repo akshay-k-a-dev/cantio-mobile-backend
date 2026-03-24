@@ -509,7 +509,7 @@ def cache_clear():
 
 @app.get("/proxy")
 async def proxy_stream(
-    url: str = Query(..., description="YouTube or music URL to proxy"),
+    url: str = Query(None, description="YouTube or music URL to proxy"),
     video_id: str = Query(None, description="YouTube video ID (shortcut, avoids URL parsing)")
 ):
     """
@@ -522,6 +522,9 @@ async def proxy_stream(
     # Build URL from video_id if provided
     if video_id:
         url = f"https://www.youtube.com/watch?v={video_id}"
+    
+    if not url:
+        raise HTTPException(status_code=400, detail="Either url or video_id is required")
     
     if not is_music_platform(url):
         raise HTTPException(
